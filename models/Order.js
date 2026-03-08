@@ -3,10 +3,10 @@ const mongoose = require('mongoose');
 const orderSchema = new mongoose.Schema({
     orderId: { type: String, unique: true },
     customerName: String,
-    customerNumber: String,
+    customerNumber: { type: String, required: true },
     customerAddress: {
-        street: String,
-        city: String,
+        street: { type: String, required: true },
+        city: { type: String, required: true },
         zipCode: String
     },
     items: [{
@@ -15,7 +15,7 @@ const orderSchema = new mongoose.Schema({
         price: Number,
         quantity: Number
     }],
-    totalAmount: Number,
+    totalAmount: { type: Number, required: true },
     status: {
         type: String,
         enum: ['pending', 'confirmed', 'processing', 'shipped', 'delivered', 'cancelled'],
@@ -51,5 +51,13 @@ orderSchema.pre('save', async function(next) {
     }
     next();
 });
+
+// Update tracking history
+orderSchema.methods.updateStatus = function(newStatus, note = '') {
+    this.status = newStatus;
+    this.trackingHistory.push({ status: newStatus, note, date: new Date() });
+    this.updatedAt = new Date();
+    return this.save();
+};
 
 module.exports = mongoose.model('Order', orderSchema);
