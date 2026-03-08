@@ -420,4 +420,101 @@ async function processOrder(session, from, address) {
     try {
         // Calculate total
         let total = 0;
-        session.cart.forEach(item =>
+        session.cart.forEach(item => {
+            total += item.price * item.quantity;
+        });
+
+        // Create order
+        const order = new Order({
+            customerNumber: from,
+            customerAddress: {
+                street: address.street,
+                city: address.city,
+                zipCode: address.zipCode || ''
+            },
+            items: session.cart,
+            totalAmount: total,
+            paymentMethod: 'cash',
+            trackingHistory: [{
+                status: 'pending',
+                note: 'Order received'
+            }]
+        });
+
+        await order.save();
+
+        // Update customer's orders
+        await Customer.findOneAndUpdate(
+            { phoneNumber: from },
+            { 
+                $push: { orders: order._id },
+                $set: { lastActive: new Date() }
+            },
+            { upsert: true }
+        );
+
+        // Clear cart
+        session.cart = [];
+        session.state = 'MENU';
+
+        let message = '✅ *Order Placed Successfully!*\n\n';
+        message += `📦 Order ID: *${order.orderId}*\n`;
+        message += `💰 Total: Rs. ${total}\n`;
+        message += `📍 Delivery Address:\n`;
+        message += `${address.street}\n`;
+        message += `${address.city}${address.zipCode ? ' - ' + address.zipCode : ''}\n\n`;
+        message += 'You can track your order using the Order ID.\n';
+        message += 'We will notify you when order is confirmed.';
+
+        return {
+            type: 'buttons',
+            content: message,
+            buttons: [
+                { body: '📦 Track Order' },
+                { body: '🛍️ Shop More' },
+                { body: '🏠 Main Menu' }
+            ]
+        };
+    } catch (error) {
+        console.error('Process order error:', error);
+        return { type: 'text', content: '❌ Error processing order. Please try again.' };
+    }
+}
+
+// Show Help
+function showHelp() {
+    let message = 'ℹ️ *Help Center*\n\n';
+    message += '*Available Commands:*\n';
+    message += '🛍️ Products - Browse our products\n';
+    message += '🛒 My Cart - View your cart\n';
+    message += '📦 My Orders - Check order status\n';
+    message += '👤 Profile - View your profile\n';
+    message += '📍 Address - Manage addresses\n\n';
+    
+    message += '*How to Order:*\n';
+    message += '1. Browse products\n';
+    message += '2. Add items to cart\n';
+    message += '3. Checkout with address\n';
+    message += '4. Track order with ID\n\n';
+    
+    message += '*Support:*\n';
+    message += '⏰ Hours: 9 AM - 10 PM\n';
+    message += 'Reply "back" to return to main menu';
+    
+    return { type: 'text', content: message };
+}
+
+// Helper function for status emojis
+function getStatusEmoji(status) {
+    const emojis = {
+        'pending': '⏳',
+        'confirmed': '✅',
+        'processing': '🔄',
+        'shipped': '🚚',
+        'delivered': '📦',
+        'cancelled': '❌'
+    };
+    return emojis[status] || '📋';
+}
+
+module.exports = { handleMessage, mainMenu };
