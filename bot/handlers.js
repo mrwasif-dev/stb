@@ -24,7 +24,7 @@ async function handleMessage(body, session, from) {
     if (body === '📍 Address') return await manageAddress(from, session);
     if (body === 'ℹ️ Help') return showHelp();
     
-    // Handle specific flows based on session state
+    // Handle specific flows
     switch(session.state) {
         case 'VIEWING_PRODUCTS':
             return await handleProductSelection(body, session);
@@ -41,36 +41,36 @@ async function handleMessage(body, session, from) {
     }
 }
 
-// Show Products with Categories
+// Show Products
 async function showProducts(session) {
-    const products = await Product.find({ available: true }).limit(10);
-    
-    if (products.length === 0) {
-        return {
-            type: 'text',
-            content: '😔 No products available at the moment.'
-        };
-    }
+    try {
+        const products = await Product.find({ available: true }).limit(10);
+        
+        if (products.length === 0) {
+            return {
+                type: 'text',
+                content: '😔 No products available at the moment.'
+            };
+        }
 
-    let message = '🛍️ *Our Products:*\n\n';
-    const buttons = [];
-    
-    products.forEach((p, index) => {
-        message += `${index + 1}. *${p.name}*\n`;
-        message += `   💰 Rs. ${p.price}\n`;
-        message += `   📦 Stock: ${p.stock}\n\n`;
-        buttons.push({ body: `View ${p.name}` });
-    });
-    
-    message += 'Reply with product number to view details\nOr type "back" for main menu';
-    
-    session.state = 'VIEWING_PRODUCTS';
-    session.tempData.products = products;
-    
-    return {
-        type: 'text',
-        content: message
-    };
+        let message = '🛍️ *Our Products:*\n\n';
+        
+        products.forEach((p, index) => {
+            message += `${index + 1}. *${p.name}*\n`;
+            message += `   💰 Rs. ${p.price}\n`;
+            message += `   📦 Stock: ${p.stock}\n\n`;
+        });
+        
+        message += 'Reply with product number to view details\nOr type "back" for main menu';
+        
+        session.state = 'VIEWING_PRODUCTS';
+        session.tempData.products = products;
+        
+        return { type: 'text', content: message };
+    } catch (error) {
+        console.error('Show products error:', error);
+        return { type: 'text', content: '❌ Error loading products. Please try again.' };
+    }
 }
 
 // Show Cart
@@ -105,115 +105,122 @@ function showCart(session) {
     
     session.state = 'CHECKOUT';
     
-    return {
-        type: 'text',
-        content: message
-    };
+    return { type: 'text', content: message };
 }
 
 // Show Orders
 async function showOrders(from) {
-    const customer = await Customer.findOne({ phoneNumber: from }).populate('orders');
-    
-    if (!customer || customer.orders.length === 0) {
-        return {
-            type: 'buttons',
-            content: '📦 You have no orders yet!',
-            buttons: [
-                { body: '🛍️ Start Shopping' },
-                { body: '🏠 Main Menu' }
-            ]
-        };
-    }
+    try {
+        const customer = await Customer.findOne({ phoneNumber: from }).populate('orders');
+        
+        if (!customer || !customer.orders || customer.orders.length === 0) {
+            return {
+                type: 'buttons',
+                content: '📦 You have no orders yet!',
+                buttons: [
+                    { body: '🛍️ Start Shopping' },
+                    { body: '🏠 Main Menu' }
+                ]
+            };
+        }
 
-    let message = '📦 *Your Orders:*\n\n';
-    
-    customer.orders.slice(0, 5).forEach((order, index) => {
-        message += `${index + 1}. *Order #${order.orderId}*\n`;
-        message += `   Status: ${getStatusEmoji(order.status)} ${order.status}\n`;
-        message += `   Total: Rs. ${order.totalAmount}\n`;
-        message += `   Date: ${order.createdAt.toLocaleDateString()}\n\n`;
-    });
-    
-    message += 'Reply with order ID to track (e.g., ORD23120001)\n';
-    message += 'Or type "back" for main menu';
-    
-    return {
-        type: 'text',
-        content: message
-    };
+        let message = '📦 *Your Orders:*\n\n';
+        
+        customer.orders.slice(0, 5).forEach((order, index) => {
+            const emoji = getStatusEmoji(order.status);
+            message += `${index + 1}. *Order #${order.orderId}*\n`;
+            message += `   ${emoji} Status: ${order.status}\n`;
+            message += `   💰 Total: Rs. ${order.totalAmount}\n`;
+            message += `   📅 Date: ${new Date(order.createdAt).toLocaleDateString()}\n\n`;
+        });
+        
+        message += 'Reply with order ID to track (e.g., ORD23120001)\n';
+        message += 'Or type "back" for main menu';
+        
+        return { type: 'text', content: message };
+    } catch (error) {
+        console.error('Show orders error:', error);
+        return { type: 'text', content: '❌ Error loading orders.' };
+    }
 }
 
 // Show Profile
 async function showProfile(from) {
-    const customer = await Customer.findOne({ phoneNumber: from });
-    
-    if (!customer) {
+    try {
+        const customer = await Customer.findOne({ phoneNumber: from });
+        
+        if (!customer) {
+            return mainMenu;
+        }
+
+        const ordersCount = customer.orders ? customer.orders.length : 0;
+        const addressesCount = customer.addresses ? customer.addresses.length : 0;
+        
+        let message = '👤 *Your Profile*\n\n';
+        message += `📱 Phone: ${customer.phoneNumber}\n`;
+        message += `📦 Total Orders: ${ordersCount}\n`;
+        message += `📍 Addresses: ${addressesCount}\n`;
+        message += `🕐 Last Active: ${new Date(customer.lastActive).toLocaleDateString()}\n\n`;
+        
+        message += 'Options:\n';
+        message += '1️⃣ Manage Addresses\n';
+        message += '2️⃣ My Orders\n';
+        message += '3️⃣ Back to Menu';
+        
+        return { type: 'text', content: message };
+    } catch (error) {
+        console.error('Show profile error:', error);
         return mainMenu;
     }
-
-    const ordersCount = customer.orders.length;
-    const lastOrder = ordersCount > 0 ? customer.orders[ordersCount - 1] : null;
-    
-    let message = '👤 *Your Profile*\n\n';
-    message += `📱 Phone: ${customer.phoneNumber}\n`;
-    message += `📦 Total Orders: ${ordersCount}\n`;
-    if (lastOrder) {
-        message += `🕐 Last Order: ${lastOrder.createdAt.toLocaleDateString()}\n`;
-    }
-    message += `📍 Addresses: ${customer.addresses.length}\n\n`;
-    
-    message += 'Options:\n';
-    message += '1️⃣ Manage Addresses\n';
-    message += '2️⃣ My Orders\n';
-    message += '3️⃣ Back to Menu';
-    
-    return {
-        type: 'text',
-        content: message
-    };
 }
 
 // Manage Address
 async function manageAddress(from, session) {
-    const customer = await Customer.findOne({ phoneNumber: from });
-    
-    if (!customer || customer.addresses.length === 0) {
-        session.state = 'ADDRESS';
-        session.tempData.addressStep = 'new';
+    try {
+        const customer = await Customer.findOne({ phoneNumber: from });
         
-        return {
-            type: 'text',
-            content: '📍 *Add New Address*\n\nPlease send your address in this format:\n\n`Street, City, ZIP Code`\n\nExample: Main Street, Karachi, 75500'
-        };
-    }
+        if (!customer || !customer.addresses || customer.addresses.length === 0) {
+            session.state = 'ADDRESS';
+            session.tempData.addressStep = 'new';
+            
+            return {
+                type: 'text',
+                content: '📍 *Add New Address*\n\nPlease send your address in this format:\n\n`Street, City, ZIP Code`\n\nExample: Main Street, Karachi, 75500'
+            };
+        }
 
-    let message = '📍 *Your Addresses:*\n\n';
-    
-    customer.addresses.forEach((addr, index) => {
-        message += `${index + 1}. ${addr.type.toUpperCase()}\n`;
-        message += `   ${addr.street}\n`;
-        message += `   ${addr.city} - ${addr.zipCode}\n`;
-        if (addr.isDefault) message += '   ✅ Default\n';
-        message += '\n';
-    });
-    
-    message += 'Options:\n';
-    message += '1️⃣ Add New Address\n';
-    message += '2️⃣ Set Default Address\n';
-    message += '3️⃣ Back to Menu';
-    
-    session.state = 'ADDRESS';
-    session.tempData.addressStep = 'menu';
-    
-    return {
-        type: 'text',
-        content: message
-    };
+        let message = '📍 *Your Addresses:*\n\n';
+        
+        customer.addresses.forEach((addr, index) => {
+            message += `${index + 1}. ${addr.type.toUpperCase()}\n`;
+            message += `   ${addr.street}\n`;
+            message += `   ${addr.city} - ${addr.zipCode || 'N/A'}\n`;
+            if (addr.isDefault) message += '   ✅ Default\n';
+            message += '\n';
+        });
+        
+        message += 'Options:\n';
+        message += '1️⃣ Add New Address\n';
+        message += '2️⃣ Set Default Address\n';
+        message += '3️⃣ Back to Menu';
+        
+        session.state = 'ADDRESS';
+        session.tempData.addressStep = 'menu';
+        
+        return { type: 'text', content: message };
+    } catch (error) {
+        console.error('Manage address error:', error);
+        return mainMenu;
+    }
 }
 
 // Handle Product Selection
 async function handleProductSelection(body, session) {
+    if (body.toLowerCase() === 'back') {
+        session.state = 'MENU';
+        return mainMenu;
+    }
+    
     const index = parseInt(body) - 1;
     const products = session.tempData.products;
     
@@ -229,15 +236,7 @@ async function handleProductSelection(body, session) {
         message += 'How many would you like to buy?\n';
         message += '(Reply with number or "back" to products)';
         
-        return {
-            type: 'text',
-            content: message
-        };
-    }
-    
-    if (body.toLowerCase() === 'back') {
-        session.state = 'MENU';
-        return mainMenu;
+        return { type: 'text', content: message };
     }
     
     return {
@@ -248,6 +247,11 @@ async function handleProductSelection(body, session) {
 
 // Handle Add to Cart
 async function handleAddToCart(body, session) {
+    if (body.toLowerCase() === 'back') {
+        session.state = 'VIEWING_PRODUCTS';
+        return await showProducts(session);
+    }
+    
     const quantity = parseInt(body);
     const product = session.tempData.selectedProduct;
     
@@ -273,11 +277,6 @@ async function handleAddToCart(body, session) {
         };
     }
     
-    if (body.toLowerCase() === 'back') {
-        session.state = 'VIEWING_PRODUCTS';
-        return await showProducts(session);
-    }
-    
     return {
         type: 'text',
         content: '❌ Invalid quantity. Please enter a valid number.'
@@ -290,7 +289,7 @@ async function handleCheckout(body, session, from) {
         // Check if customer has address
         const customer = await Customer.findOne({ phoneNumber: from });
         
-        if (!customer || customer.addresses.length === 0) {
+        if (!customer || !customer.addresses || customer.addresses.length === 0) {
             session.state = 'ADDRESS';
             session.tempData.checkoutMode = true;
             
@@ -300,8 +299,11 @@ async function handleCheckout(body, session, from) {
             };
         }
         
-        // Proceed to payment
-        return await processOrder(session, from, customer.addresses[0]);
+        // Find default address or use first
+        const defaultAddress = customer.addresses.find(a => a.isDefault) || customer.addresses[0];
+        
+        // Proceed to order
+        return await processOrder(session, from, defaultAddress);
     }
     
     if (body === '2') {
@@ -331,7 +333,7 @@ async function handleAddressInput(body, session, from) {
         return mainMenu;
     }
     
-    // Parse address (simple format: Street, City, ZIP)
+    // Parse address
     const parts = body.split(',').map(p => p.trim());
     
     if (parts.length >= 2) {
@@ -339,7 +341,7 @@ async function handleAddressInput(body, session, from) {
             type: 'home',
             street: parts[0],
             city: parts[1],
-            zipCode: parts[2] || '00000',
+            zipCode: parts[2] || '',
             isDefault: true
         };
         
@@ -378,128 +380,44 @@ async function handleAddressInput(body, session, from) {
 
 // Handle Track Order
 async function handleTrackOrder(body, from) {
-    const order = await Order.findOne({ orderId: body.toUpperCase() });
-    
-    if (!order || order.customerNumber !== from) {
-        return {
-            type: 'text',
-            content: '❌ Order not found. Please check your order ID.'
-        };
-    }
+    try {
+        const order = await Order.findOne({ orderId: body.toUpperCase() });
+        
+        if (!order || order.customerNumber !== from) {
+            return {
+                type: 'text',
+                content: '❌ Order not found. Please check your order ID.'
+            };
+        }
 
-    let message = `📦 *Order #${order.orderId}*\n\n`;
-    message += `📊 Status: ${getStatusEmoji(order.status)} ${order.status}\n`;
-    message += `💰 Total: Rs. ${order.totalAmount}\n`;
-    message += `💳 Payment: ${order.paymentStatus}\n\n`;
-    
-    message += '*Tracking History:*\n';
-    order.trackingHistory.forEach(entry => {
-        message += `${getStatusEmoji(entry.status)} ${entry.status} - ${entry.date.toLocaleString()}\n`;
-        if (entry.note) message += `   Note: ${entry.note}\n`;
-    });
-    
-    message += '\nReply "back" for main menu';
-    
-    return {
-        type: 'text',
-        content: message
-    };
+        let message = `📦 *Order #${order.orderId}*\n\n`;
+        message += `📊 Status: ${getStatusEmoji(order.status)} ${order.status}\n`;
+        message += `💰 Total: Rs. ${order.totalAmount}\n`;
+        message += `💳 Payment: ${order.paymentStatus}\n\n`;
+        
+        message += '*📋 Tracking History:*\n';
+        if (order.trackingHistory && order.trackingHistory.length > 0) {
+            order.trackingHistory.forEach(entry => {
+                message += `${getStatusEmoji(entry.status)} ${entry.status} - ${new Date(entry.date).toLocaleString()}\n`;
+                if (entry.note) message += `   Note: ${entry.note}\n`;
+            });
+        } else {
+            message += 'No tracking history yet.\n';
+        }
+        
+        message += '\nReply "back" for main menu';
+        
+        session.state = 'MENU';
+        return { type: 'text', content: message };
+    } catch (error) {
+        console.error('Track order error:', error);
+        return { type: 'text', content: '❌ Error tracking order.' };
+    }
 }
 
 // Process Order
 async function processOrder(session, from, address) {
-    // Calculate total
-    let total = 0;
-    session.cart.forEach(item => {
-        total += item.price * item.quantity;
-    });
-
-    // Create order
-    const order = new Order({
-        customerNumber: from,
-        customerAddress: {
-            street: address.street,
-            city: address.city,
-            zipCode: address.zipCode
-        },
-        items: session.cart,
-        totalAmount: total,
-        paymentMethod: 'cash',
-        trackingHistory: [{
-            status: 'pending',
-            note: 'Order received'
-        }]
-    });
-
-    await order.save();
-
-    // Update customer's orders
-    await Customer.findOneAndUpdate(
-        { phoneNumber: from },
-        { 
-            $push: { orders: order._id },
-            $set: { lastActive: new Date() }
-        }
-    );
-
-    // Clear cart
-    session.cart = [];
-    session.state = 'MENU';
-
-    let message = '✅ *Order Placed Successfully!*\n\n';
-    message += `📦 Order ID: *${order.orderId}*\n`;
-    message += `💰 Total: Rs. ${total}\n`;
-    message += `📍 Delivery Address:\n`;
-    message += `${address.street}\n`;
-    message += `${address.city} - ${address.zipCode}\n\n`;
-    message += 'You can track your order using the Order ID.\n';
-    message += 'We will notify you when order is confirmed.';
-
-    return {
-        type: 'buttons',
-        content: message,
-        buttons: [
-            { body: '📦 Track Order' },
-            { body: '🛍️ Shop More' },
-            { body: '🏠 Main Menu' }
-        ]
-    };
-}
-
-// Show Help
-function showHelp() {
-    let message = 'ℹ️ *Help Center*\n\n';
-    message += '*Available Commands:*\n';
-    message += '🛍️ Products - Browse our products\n';
-    message += '🛒 My Cart - View your cart\n';
-    message += '📦 My Orders - Check order status\n';
-    message += '👤 Profile - View your profile\n';
-    message += '📍 Address - Manage addresses\n\n';
-    
-    message += '*Support:*\n';
-    message += '📞 Call: +92 300 1234567\n';
-    message += '📧 Email: support@store.com\n';
-    message += '⏰ Hours: 9 AM - 10 PM\n\n';
-    
-    message += 'Type "back" to return to main menu';
-    
-    return {
-        type: 'text',
-        content: message
-    };
-}
-
-// Helper function for status emojis
-function getStatusEmoji(status) {
-    const emojis = {
-        'pending': '⏳',
-        'confirmed': '✅',
-        'processing': '🔄',
-        'shipped': '🚚',
-        'delivered': '📦',
-        'cancelled': '❌'
-    };
-    return emojis[status] || '📋';
-}
-
-module.exports = { handleMessage, mainMenu };
+    try {
+        // Calculate total
+        let total = 0;
+        session.cart.forEach(item =>
