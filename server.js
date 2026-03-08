@@ -4,6 +4,7 @@ const path = require('path');
 const mongoose = require('mongoose');
 const { connectDB, Product, Order, Customer } = require('./database');
 const WhatsAppBot = require('./bot/client');
+const fs = require('fs');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
@@ -11,27 +12,59 @@ const PORT = process.env.PORT || 3000;
 // Middleware
 app.use(express.json());
 app.use(express.static('public'));
+app.use(express.urlencoded({ extended: true }));
 
-// Initialize Bot
-const bot = new WhatsAppBot();
-bot.initialize();
+// Security headers for Heroku
+app.use((req, res, next) => {
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    res.setHeader('X-Frame-Options', 'DENY');
+    res.setHeader('X-XSS-Protection', '1; mode=block');
+    next();
+});
 
-// Connect to MongoDB
-connectDB();
+// Create session directory if not exists
+const sessionDir = path.join(__dirname, '.wwebjs_auth');
+if (!fs.existsSync(sessionDir)) {
+    fs.mkdirSync(sessionDir, { recursive: true });
+}
+
+// Initialize Bot with Heroku settings
+const bot = new WhatsAppBot({
+    sessionDir: sessionDir,
+    headless: true,
+    args: [
+        '--no-sandbox',
+        '--disable-setuid-sandbox',
+        '--disable-dev-shm-usage',
+        '--disable-accelerated-2d-canvas',
+        '--disable-gpu',
+        '--window-size=1920x1080'
+    ]
+});
+
+// Connect to MongoDB Atlas
+connectDB().then(() => {
+    console.log('✅ MongoDB Atlas Connected');
+    
+    // Initialize bot after DB connection
+    bot.initialize().catch(err => {
+        console.error('Bot initialization error:', err);
+    });
+}).catch(err => {
+    console.error('MongoDB connection error:', err);
+    process.exit(1);
+});
 
 // API Routes
-
-// Get all products
 app.get('/api/products', async (req, res) => {
     try {
-        const products = await Product.find().sort({ createdAt: -1 });
+        const products = await Product.find({ available: true }).sort({ createdAt: -1 });
         res.json(products);
     } catch (error) {
         res.status(500).json({ error: error.message });
     }
 });
 
-// Add product
 app.post('/api/products', async (req, res) => {
     try {
         const product = new Product(req.body);
@@ -42,7 +75,6 @@ app.post('/api/products', async (req, res) => {
     }
 });
 
-// Update product
 app.put('/api/products/:id', async (req, res) => {
     try {
         const product = await Product.findByIdAndUpdate(
@@ -56,7 +88,6 @@ app.put('/api/products/:id', async (req, res) => {
     }
 });
 
-// Delete product
 app.delete('/api/products/:id', async (req, res) => {
     try {
         await Product.findByIdAndDelete(req.params.id);
@@ -66,7 +97,6 @@ app.delete('/api/products/:id', async (req, res) => {
     }
 });
 
-// Get all orders
 app.get('/api/orders', async (req, res) => {
     try {
         const orders = await Order.find().sort({ createdAt: -1 }).limit(50);
@@ -76,7 +106,6 @@ app.get('/api/orders', async (req, res) => {
     }
 });
 
-// Update order status
 app.put('/api/orders/:id/status', async (req, res) => {
     try {
         const order = await Order.findById(req.params.id);
@@ -86,14 +115,14 @@ app.put('/api/orders/:id/status', async (req, res) => {
         
         await order.updateStatus(req.body.status, req.body.note);
         
-        // Notify customer via WhatsApp
-        const customer = await Customer.findOne({ phoneNumber: order.customerNumber });
-        if (customer && bot.client) {
-            const statusMsg = `📦 Your order #${order.orderId} is now ${req.body.status}`;
-            if (req.body.note) {
-                statusMsg += `\nNote: ${req.body.note}`;
+        // Notify customer if bot is connected
+        if (bot && bot.client && bot.client.info) {
+            const customer = await Customer.findOne({ phoneNumber: order.customerNumber });
+            if (customer) {
+                const statusMsg = `📦 Your order #${order.orderId} is now ${req.body.status}`;
+                if (req.body.note) statusMsg += `\nNote: ${req.body.note}`;
+                bot.client.sendMessage(customer.phoneNumber, statusMsg).catch(console.error);
             }
-            bot.client.sendMessage(customer.phoneNumber, statusMsg).catch(console.error);
         }
         
         res.json(order);
@@ -102,73 +131,48 @@ app.put('/api/orders/:id/status', async (req, res) => {
     }
 });
 
-// Get stats
 app.get('/api/stats', async (req, res) => {
     try {
         const customers = await Customer.countDocuments();
-        res.json({ customers });
+        const products = await Product.countDocuments();
+        const orders = await Order.countDocuments();
+        const pendingOrders = await Order.countDocuments({ status: 'pending' });
+        
+        res.json({ customers, products, orders, pendingOrders });
     } catch (error) {
         res.status(500).json({ error: error.message });
     }
 });
 
-// Get QR code
-app.get('/api/qr', (req, res) => {
-    // This would need to be implemented with proper QR storage
-    res.json({ qr: 'QR_CODE_DATA' });
-});
-
-// Bot status
 app.get('/api/bot-status', (req, res) => {
     res.json({ 
-        connected: bot.client && bot.client.info ? true : false 
+        connected: bot && bot.client && bot.client.info ? true : false,
+        phone: bot.client && bot.client.info ? bot.client.info.wid.user : null
     });
 });
 
-// Refresh QR
 app.post('/api/refresh-qr', (req, res) => {
-    // Reinitialize bot
-    bot.initialize();
-    res.json({ message: 'QR refreshed' });
-});
-
-// Broadcast message
-app.post('/api/broadcast', async (req, res) => {
-    try {
-        const { message, target } = req.body;
-        
-        let query = {};
-        if (target === 'active') {
-            const weekAgo = new Date();
-            weekAgo.setDate(weekAgo.getDate() - 7);
-            query.lastActive = { $gte: weekAgo };
-        } else if (target === 'new') {
-            const monthAgo = new Date();
-            monthAgo.setMonth(monthAgo.getMonth() - 1);
-            query.createdAt = { $gte: monthAgo };
-        }
-        
-        const customers = await Customer.find(query);
-        
-        // Send messages (limit to 50 per minute to avoid spam)
-        let sent = 0;
-        for (const customer of customers) {
-            if (bot.client) {
-                await bot.client.sendMessage(customer.phoneNumber, message);
-                sent++;
-                await new Promise(resolve => setTimeout(resolve, 2000));
-            }
-        }
-        
-        res.json({ message: `Broadcast sent to ${sent} customers` });
-    } catch (error) {
-        res.status(400).json({ error: error.message });
+    if (bot) {
+        bot.initialize().catch(console.error);
+        res.json({ message: 'QR refreshed' });
+    } else {
+        res.status(500).json({ error: 'Bot not initialized' });
     }
 });
 
 // Serve admin panel
 app.get('/', (req, res) => {
     res.sendFile(path.join(__dirname, 'admin.html'));
+});
+
+// Health check for Heroku
+app.get('/health', (req, res) => {
+    res.json({ 
+        status: 'healthy', 
+        timestamp: new Date(),
+        mongodb: mongoose.connection.readyState === 1 ? 'connected' : 'disconnected',
+        bot: bot && bot.client && bot.client.info ? 'connected' : 'disconnected'
+    });
 });
 
 // Error handling middleware
@@ -178,29 +182,39 @@ app.use((err, req, res, next) => {
 });
 
 // Start server
-app.listen(PORT, () => {
+const server = app.listen(PORT, '0.0.0.0', () => {
     console.log(`
-    🚀 Server is running on http://localhost:${PORT}
+    🚀 WhatsApp Store Bot Deployed on Heroku!
+    ==========================================
+    📱 Port: ${PORT}
+    🔗 URL: https://your-app-name.herokuapp.com
+    📊 MongoDB: ${mongoose.connection.readyState === 1 ? '✅ Connected' : '❌ Disconnected'}
+    🤖 Bot Status: ${bot && bot.client && bot.client.info ? '✅ Running' : '⏳ Initializing'}
     
-    📱 WhatsApp Bot Features:
-    ✅ Product Catalog
-    ✅ Shopping Cart
-    ✅ Order Management
-    ✅ Address Management
-    ✅ Order Tracking
-    ✅ Customer Profiles
-    ✅ Admin Panel
-    
-    🔗 Access Admin Panel: http://localhost:${PORT}
+    Admin Panel: https://your-app-name.herokuapp.com
+    Username: ${process.env.ADMIN_USERNAME}
+    Password: ${process.env.ADMIN_PASSWORD}
     `);
 });
 
 // Graceful shutdown
-process.on('SIGINT', async () => {
-    console.log('Shutting down...');
-    if (bot.client) {
-        await bot.client.destroy();
-    }
-    await mongoose.connection.close();
-    process.exit();
+process.on('SIGTERM', () => {
+    console.log('SIGTERM signal received: closing HTTP server');
+    server.close(() => {
+        console.log('HTTP server closed');
+        if (bot && bot.client) {
+            bot.client.destroy().then(() => {
+                console.log('Bot client destroyed');
+                mongoose.connection.close(false, () => {
+                    console.log('MongoDB connection closed');
+                    process.exit(0);
+                });
+            });
+        } else {
+            mongoose.connection.close(false, () => {
+                console.log('MongoDB connection closed');
+                process.exit(0);
+            });
+        }
+    });
 });
