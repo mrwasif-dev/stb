@@ -1,10 +1,16 @@
 const mongoose = require('mongoose');
 
-// Connect to MongoDB
 const connectDB = async () => {
     try {
-        await mongoose.connect(process.env.MONGODB_URI);
-        console.log('✅ MongoDB Connected Successfully');
+        const conn = await mongoose.connect(process.env.MONGODB_URI, {
+            useNewUrlParser: true,
+            useUnifiedTopology: true,
+            serverSelectionTimeoutMS: 5000,
+            socketTimeoutMS: 45000,
+        });
+        
+        console.log(`✅ MongoDB Connected: ${conn.connection.host}`);
+        return conn;
     } catch (error) {
         console.error('❌ MongoDB Connection Error:', error);
         process.exit(1);
@@ -15,9 +21,9 @@ const connectDB = async () => {
 const productSchema = new mongoose.Schema({
     name: { type: String, required: true },
     price: { type: Number, required: true },
-    category: { type: String, required: true },
+    category: { type: String, required: true, enum: ['clothing', 'footwear', 'accessories', 'electronics', 'other'] },
     description: String,
-    stock: { type: Number, default: 0 },
+    stock: { type: Number, default: 0, min: 0 },
     image: String,
     available: { type: Boolean, default: true },
     createdAt: { type: Date, default: Date.now }
@@ -27,10 +33,10 @@ const productSchema = new mongoose.Schema({
 const orderSchema = new mongoose.Schema({
     orderId: { type: String, unique: true },
     customerName: String,
-    customerNumber: String,
+    customerNumber: { type: String, required: true, index: true },
     customerAddress: {
-        street: String,
-        city: String,
+        street: { type: String, required: true },
+        city: { type: String, required: true },
         zipCode: String,
         phone: String
     },
@@ -38,13 +44,14 @@ const orderSchema = new mongoose.Schema({
         productId: { type: mongoose.Schema.Types.ObjectId, ref: 'Product' },
         name: String,
         price: Number,
-        quantity: Number
+        quantity: { type: Number, min: 1 }
     }],
-    totalAmount: Number,
+    totalAmount: { type: Number, required: true },
     status: {
         type: String,
         enum: ['pending', 'confirmed', 'processing', 'shipped', 'delivered', 'cancelled'],
-        default: 'pending'
+        default: 'pending',
+        index: true
     },
     paymentMethod: {
         type: String,
@@ -61,16 +68,16 @@ const orderSchema = new mongoose.Schema({
         date: { type: Date, default: Date.now },
         note: String
     }],
-    createdAt: { type: Date, default: Date.now },
+    createdAt: { type: Date, default: Date.now, index: true },
     updatedAt: { type: Date, default: Date.now }
 });
 
 // Customer Schema
 const customerSchema = new mongoose.Schema({
-    phoneNumber: { type: String, unique: true },
+    phoneNumber: { type: String, required: true, unique: true, index: true },
     name: String,
     addresses: [{
-        type: { type: String, enum: ['home', 'office', 'other'] },
+        type: { type: String, enum: ['home', 'office', 'other'], default: 'home' },
         street: String,
         city: String,
         zipCode: String,
@@ -79,7 +86,7 @@ const customerSchema = new mongoose.Schema({
     orders: [{ type: mongoose.Schema.Types.ObjectId, ref: 'Order' }],
     wishlist: [{ type: mongoose.Schema.Types.ObjectId, ref: 'Product' }],
     createdAt: { type: Date, default: Date.now },
-    lastActive: Date
+    lastActive: { type: Date, default: Date.now }
 });
 
 // Generate Order ID
@@ -97,10 +104,15 @@ orderSchema.pre('save', async function(next) {
 // Update tracking history
 orderSchema.methods.updateStatus = function(newStatus, note = '') {
     this.status = newStatus;
-    this.trackingHistory.push({ status: newStatus, note });
+    this.trackingHistory.push({ status: newStatus, note, date: new Date() });
     this.updatedAt = new Date();
     return this.save();
 };
+
+// Indexes for better performance
+productSchema.index({ category: 1, available: 1 });
+orderSchema.index({ customerNumber: 1, createdAt: -1 });
+customerSchema.index({ phoneNumber: 1 });
 
 const Product = mongoose.model('Product', productSchema);
 const Order = mongoose.model('Order', orderSchema);
